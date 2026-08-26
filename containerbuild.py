@@ -11,6 +11,8 @@ import os
 import subprocess
 import sys
 
+from _common import Style, die, require_root
+
 SERVICES = [
     "authservice",
     "mailservice",
@@ -21,23 +23,6 @@ SERVICES = [
     "swctl",
     "tilesservice",
 ]
-
-
-class Style:
-    def __init__(self, enabled):
-        self.reset = "\033[0m" if enabled else ""
-        self.bold = "\033[1m" if enabled else ""
-        self.dim = "\033[2m" if enabled else ""
-        self.yellow = "\033[33m" if enabled else ""
-        self.red = "\033[31m" if enabled else ""
-
-    def paint(self, color, text):
-        return f"{color}{text}{self.reset}"
-
-
-def die(msg):
-    print(msg, file=sys.stderr)
-    sys.exit(1)
 
 
 def parse_args():
@@ -127,10 +112,7 @@ def show_tags(services, root, env, style):
 
 def main():
     args = parse_args()
-    root = os.environ.get("SWAYRIDER_ROOT")
-    if not root:
-        die("SWAYRIDER_ROOT is not set — run via direnv, or "
-            "`source .vscode/environment.example` first")
+    root = require_root()
 
     services = resolve_services(args.services)
 
