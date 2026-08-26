@@ -9,10 +9,25 @@ Requires SWAYRIDER_ROOT to be set (exported by .envrc /
 
 import glob
 import os
+import platform
 import re
+import shlex
+import shutil
+import subprocess
 import sys
+import tempfile
 
 from _common import Style, find_repos, pad, require_root, visible_len
+
+LINUX_TERMINALS = [
+    "x-terminal-emulator",
+    "gnome-terminal",
+    "konsole",
+    "xfce4-terminal",
+    "alacritty",
+    "kitty",
+    "xterm",
+]
 
 # The documented convention (Docs/REVIEW.md) is "### N. ~~Title~~ -- FIXED
 # <date>", but in practice across repos the tilde sometimes wraps the number
@@ -28,19 +43,113 @@ NUMBERED_RE = re.compile(r"(\d+)\.\s+(.*)$")
 
 def parse_file(path):
     findings = []
+    current = None
     with open(path, encoding="utf-8") as f:
-        for line in f:
-            line = line.rstrip("\n")
-            if not line.startswith("### "):
-                continue
-            body = line[len("### "):]
-            fixed = bool(FIXED_MARKER_RE.search(body))
-            m = NUMBERED_RE.match(body.replace("~~", ""))
-            if not m:
-                continue
-            num, title = m.group(1), m.group(2).strip()
-            findings.append({"num": num, "title": title, "fixed": fixed})
+        for raw_line in f:
+            line = raw_line.rstrip("\n")
+            if line.startswith("### "):
+                header = line[len("### "):]
+                fixed = bool(FIXED_MARKER_RE.search(header))
+                m = NUMBERED_RE.match(header.replace("~~", ""))
+                if not m:
+                    current = None
+                    continue
+                num, title = m.group(1), m.group(2).strip()
+                current = {"num": num, "title": title, "fixed": fixed, "body": []}
+                findings.append(current)
+            elif current is not None:
+                current["body"].append(line)
+    for finding in findings:
+        finding["body"] = "\n".join(finding["body"]).strip()
     return findings
+
+
+def build_fix_prompt(root, finding):
+    rel_path = os.path.relpath(finding["file_path"], root)
+    return (
+        f"Fix this open code-review finding in {finding['repo']} "
+        f"({rel_path}):\n\n"
+        f"### {finding['title']}\n\n"
+        f"{finding['body']}\n\n"
+        f"Once fixed, update {rel_path} per the convention in "
+        f"Docs/REVIEW.md: strike through the finding's title, append "
+        f"\"-- FIXED <date>\", and add a short description of the fix "
+        f"immediately after (what changed, which file(s), any tests added)."
+    )
+
+
+def open_new_terminal(script_path):
+    system = platform.system()
+
+    if system == "Darwin":
+        command_path = script_path + ".command"
+        os.rename(script_path, command_path)
+        os.chmod(command_path, 0o755)
+        subprocess.Popen(["open", "-a", "Terminal", command_path])
+        return True
+
+    if system == "Linux":
+        os.chmod(script_path, 0o755)
+        candidates = []
+        term_env = os.environ.get("TERMINAL")
+        if term_env:
+            candidates.append(term_env)
+        candidates.extend(LINUX_TERMINALS)
+
+        for term in candidates:
+            term_bin = shutil.which(term)
+            if not term_bin:
+                continue
+            basename = os.path.basename(term_bin)
+            if "gnome-terminal" in basename:
+                argv = [term_bin, "--", "bash", script_path]
+            elif "xfce4-terminal" in basename:
+                argv = [term_bin, f"--command=bash {shlex.quote(script_path)}"]
+            else:
+                argv = [term_bin, "-e", "bash", script_path]
+            subprocess.Popen(argv)
+            return True
+
+        print(f"no known terminal emulator found -- run manually: bash {script_path}",
+              file=sys.stderr)
+        return False
+
+    print(f"unsupported platform {system!r} -- run manually: bash {script_path}",
+          file=sys.stderr)
+    return False
+
+
+def fix_finding(root, style, finding):
+    prompt = build_fix_prompt(root, finding)
+    argv = ["claude", "--permission-mode", "plan", prompt]
+    script_lines = [
+        "#!/bin/bash",
+        f"cd {shlex.quote(root)}",
+        " ".join(shlex.quote(a) for a in argv),
+    ]
+
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".sh", delete=False, encoding="utf-8"
+    ) as f:
+        f.write("\n".join(script_lines) + "\n")
+        script_path = f.name
+
+    if open_new_terminal(script_path):
+        print(style.paint(style.green,
+              f"opened a new Claude Code session in a new terminal window "
+              f"for {finding['repo']}"))
+
+
+def fix_loop(root, style, open_findings):
+    while True:
+        choice = input("\nFix which finding? [number/q]: ").strip().lower()
+        if choice in ("", "q", "quit"):
+            return
+        if not choice.isdigit() or not (1 <= int(choice) <= len(open_findings)):
+            print(f"invalid selection -- enter a number from 1 to "
+                  f"{len(open_findings)}, or q to quit")
+            continue
+        fix_finding(root, style, open_findings[int(choice) - 1])
 
 
 def main():
@@ -65,8 +174,11 @@ def main():
                     open_count += 1
                     open_findings.append({
                         "repo": name,
+                        "repo_dir": repo,
                         "file": os.path.basename(path),
+                        "file_path": path,
                         "title": finding["title"],
+                        "body": finding["body"],
                     })
         per_repo_counts[name] = (open_count, fixed_count)
 
@@ -92,8 +204,11 @@ def main():
         return 0
 
     print(style.paint(style.bold, f"{total_open} open finding(s):"))
-    for f in open_findings:
-        print(f"  {style.paint(style.bold, f['repo'])} ({f['file']}): {f['title']}")
+    for i, f in enumerate(open_findings, start=1):
+        print(f"  {i}. {style.paint(style.bold, f['repo'])} ({f['file']}): {f['title']}")
+
+    if sys.stdin.isatty() and sys.stdout.isatty():
+        fix_loop(root, style, open_findings)
 
     return 1
 
