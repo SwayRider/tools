@@ -89,14 +89,27 @@ depaudit.py
 
 Aggregates open findings from every repo's `review/CODE_REVIEW_*.md` files
 (see `Docs/REVIEW.md` for the convention) into one cross-repo report — counts
-per repo plus a consolidated open-findings list. Detection is intentionally
-lenient about how "fixed" is marked (strikethrough per the documented
-convention, but also `✅ FIXED`/`✅ DONE`/a bare `- FIXED <date>`, since not
-every repo's review files follow the convention exactly).
+per repo plus a consolidated, numbered open-findings list. Detection is
+intentionally lenient about how "fixed" is marked (strikethrough per the
+documented convention, but also `✅ FIXED`/`✅ DONE`/a bare `- FIXED <date>`,
+since not every repo's review files follow the convention exactly).
 
 ```
 reviewstatus.py
 ```
+
+When run in a terminal (skipped automatically when piped/non-interactive, so
+CI usage is unaffected), it then prompts `Fix which finding? [number/q]:`.
+Picking a number opens a **new terminal window** running a fresh `claude
+--permission-mode plan "<prompt>"` session, launched from `SWAYRIDER_ROOT`
+and seeded with the finding's full title/body plus the `Docs/REVIEW.md`
+fix-marking instructions as its first turn — landing straight in plan mode.
+`q`/empty exits the prompt. Works on macOS (`open -a Terminal`, via a
+generated `.command` file) and Linux (tries `$TERMINAL`, then
+`x-terminal-emulator`, `gnome-terminal`, `konsole`, `xfce4-terminal`,
+`alacritty`, `kitty`, `xterm` in order, whichever is found first); on
+anything else, or if no terminal emulator is found on Linux, it prints the
+command to run by hand instead of failing silently.
 
 ### `doctor.py`
 
