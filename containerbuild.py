@@ -58,7 +58,10 @@ def parse_args():
     parser.add_argument(
         "--services",
         help="comma-separated subset to build (default: all -- "
-        + ",".join(SERVICES) + ")",
+        + ",".join(SERVICES) + "). Besides the names above, an entry may be "
+        "any other directory (relative to SWAYRIDER_ROOT, or absolute) that "
+        "has a Makefile with a container-build target; those are built "
+        "after the known services",
     )
     parser.add_argument(
         "--fail-fast",
@@ -69,22 +72,30 @@ def parse_args():
     return parser.parse_args()
 
 
-def resolve_services(selection):
+def service_dir(root, svc):
+    return os.path.join(root, svc)
+
+
+def resolve_services(selection, root):
     if not selection:
         return list(SERVICES)
     requested = [s.strip() for s in selection.split(",") if s.strip()]
-    unknown = [s for s in requested if s not in SERVICES]
+    extra = [s for s in requested if s not in SERVICES]
+    unknown = [s for s in extra
+               if not os.path.isfile(os.path.join(service_dir(root, s),
+                                                  "Makefile"))]
     if unknown:
-        die(f"unknown service(s): {', '.join(unknown)} "
-            f"(known: {', '.join(SERVICES)})")
-    return [s for s in SERVICES if s in requested]
+        die(f"unknown service(s): {', '.join(unknown)} (known: "
+            f"{', '.join(SERVICES)}; any other entry must be a directory "
+            "with a Makefile)")
+    return [s for s in SERVICES if s in requested] + extra
 
 
 def show_tags(services, root, env, style):
     width = max(len(svc) for svc in services)
     failed = []
     for svc in services:
-        svc_dir = os.path.join(root, svc)
+        svc_dir = service_dir(root, svc)
         result = subprocess.run(
             ["make", "print-tags"], cwd=svc_dir, env=env,
             capture_output=True, text=True,
@@ -114,7 +125,7 @@ def main():
     args = parse_args()
     root = require_root()
 
-    services = resolve_services(args.services)
+    services = resolve_services(args.services, root)
 
     env = os.environ.copy()
     if args.dev_latest:
@@ -137,7 +148,7 @@ def main():
 
     failed = []
     for svc in services:
-        svc_dir = os.path.join(root, svc)
+        svc_dir = service_dir(root, svc)
         print(f"=== {svc} ===", flush=True)
         result = subprocess.run(make_cmd, cwd=svc_dir, env=env)
         print()
